@@ -5,7 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
   <title>Solar Forecasting Dashboard</title>
-
+  <link
+  rel="stylesheet"
+  href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  />
   <style>
     :root {
       --navy: #10283f;
@@ -235,6 +238,33 @@
     .SEVERE {
       background: #ffb4b4;
     }
+    #map {
+      width: 100%;
+      height: 520px;
+      margin-bottom: 18px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+
+    .map-description {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    #mapStatus {
+      margin: 12px 0;
+      color: var(--muted);
+    }
+
+    .forecast-popup {
+      min-width: 190px;
+      line-height: 1.6;
+    }
+
+    .forecast-popup h3 {
+      margin: 0 0 8px;
+      font-size: 1rem;
+    }
 
     .notice {
       padding: 16px;
@@ -269,6 +299,11 @@
 
       .overview {
         grid-template-columns: 1fr;
+      }
+    }
+    @media (max-width: 600px) {
+      #map {
+        height: 380px;
       }
     }
 
@@ -364,34 +399,79 @@
     </section>
 
     <section class="panel" aria-labelledby="grid-title">
-      <h2 id="grid-title">Regional solar conditions</h2>
+      <h2 id="grid-title">Regional solar forecast map</h2>
 
-      <p>
-        Each tile represents one sample location in the pilot region.
-        This is a location grid, not yet a geographic map.
+      <p class="map-description">
+        Click a sample location to view its forecast. Marker colors
+        represent irradiance, not cloud type. These are discrete
+        sample points, not continuous coverage.
       </p>
 
-      <ul class="legend" aria-label="Cloud cover categories">
+      <ul class="legend" aria-label="Irradiance color scale">
         <li>
-          <span class="swatch CLEAR" aria-hidden="true"></span>
-          Clear: below 20% cloud cover
+          <span
+            class="swatch"
+            style="background: #64748b;"
+            aria-hidden="true"
+          ></span>
+          Below 100 W/m²
         </li>
+
         <li>
-          <span class="swatch PARTLY_CLOUDY" aria-hidden="true"></span>
-          Partly cloudy: 20–80%
+          <span
+            class="swatch"
+            style="background: #60a5fa;"
+            aria-hidden="true"
+          ></span>
+          100–299 W/m²
         </li>
+
         <li>
-          <span class="swatch OVERCAST" aria-hidden="true"></span>
-          Overcast: above 80%
+          <span
+            class="swatch"
+            style="background: #facc15;"
+            aria-hidden="true"
+          ></span>
+          300–599 W/m²
+        </li>
+
+        <li>
+          <span
+            class="swatch"
+            style="background: #f97316;"
+            aria-hidden="true"
+          ></span>
+          600 W/m² and above
         </li>
       </ul>
 
-      <div id="grid" aria-label="Solar condition tiles">
-        <p>Waiting for the application to load…</p>
-      </div>
+      <div
+        id="map"
+        role="region"
+        aria-label="Interactive regional solar forecast map"
+      ></div>
+
+      <p id="mapStatus" role="status" aria-live="polite">
+        Waiting for forecast data…
+      </p>
+
+      <h3>Forecast details by location</h3>
+
+      <div id="grid" aria-label="Solar forecast details"></div>
+
+      <p class="hint">
+        Forecast data:
+        <a
+          href="https://open-meteo.com/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >Open-Meteo</a>.
+        Irradiance values are hourly averages, not panel electricity output.
+        Color bands are display categories chosen for this prototype.
+      </p>
 
       <noscript>
-        <p>Please enable JavaScript to load the condition tiles.</p>
+        <p>Please enable JavaScript to use the map.</p>
       </noscript>
     </section>
 
@@ -432,6 +512,7 @@
     Shuvayu Goswami · Solar forecasting research prototype
   </footer>
 
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="main.js"></script>
 </body>
 </html>
