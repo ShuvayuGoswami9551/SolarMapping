@@ -315,6 +315,9 @@ if (typeof L === "undefined") {
 let irradianceChart = null;
 let chartRequestId = 0;
 let chartAbortController = null;
+let selectedForecast = null;
+
+const downloadCsvBtn = document.getElementById("downloadCsvBtn");
 
 async function loadForecastChart(point, locationNumber) {
   const locationText = document.getElementById("chartLocation");
@@ -334,6 +337,9 @@ async function loadForecastChart(point, locationNumber) {
 
   statusText.textContent = "Loading the next 24 forecast hours…";
   tableBody.replaceChildren();
+
+  selectedForecast = null;
+  downloadCsvBtn.disabled = true;
 
   // Remove the old location's chart while loading.
   if (irradianceChart) {
@@ -389,6 +395,17 @@ async function loadForecastChart(point, locationNumber) {
     ) {
       throw new Error("The backend returned incomplete hourly data.");
     }
+
+    selectedForecast = {
+      lat: point.lat,
+      lon: point.lon,
+      locationNumber,
+      source: data.source ?? "Open_Meteo",
+      retrievedAtUtc: new Date().toISOString(),
+      series: data.series,
+    };
+
+    downloadCsvBtn.disabled = false;
 
     // Populate the table even if the chart library could not load.
     for (const hour of data.series) {
@@ -492,3 +509,64 @@ async function loadForecastChart(point, locationNumber) {
     clearTimeout(timeoutId);
   }
 }
+
+function escapeCsvValue(value) {
+  const text = String(value ?? "");
+  return `"${text.replaceAll('"', '""')}"`;
+}
+
+function downloadForecastCsv() {
+  if (!selectedForecast) return;
+
+  const forecast = selectedForecast;
+
+  const headers = [
+    "location_number",
+    "latitude",
+    "longitude",
+    "hour_ending_utc",
+    "mean_irradiance_wm2",
+    "cloud_cover_percent",
+    "source",
+    "retrieved_at_utc",
+    "radiation_period",
+  ];
+
+  const rows = forecast.series.map((hour) => [
+    forecast.locationNumber,
+    forecast.lat,
+    forecast.lon,
+    hour.time_utc,
+    hour.irradiance_wm2,
+    hour.cloud_cover_percent,
+    forecast.source,
+    forecast.retrievedAtUtc,
+    "Mean over the hour ending at hour_ending_utc",
+  ]);
+
+  const csv = [headers, ...rows]
+    .map((row) => row.map(escapeCsvValue).join(","))
+    .join("\r\n");
+
+  const blob = new Blob(["\uFEFF", csv], {
+    type: "text/csv;charset=utf-8;",
+  });
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  const date = forecast.series[0].time_utc.slice(0, 10);
+
+  link.href = url;
+  link.download =
+    `solar-forecast-location-${forecast.locationNumber}-${date}.csv`;
+
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+
+  // Allow the browser time to begin the download before cleanup.
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+downloadCsvBtn.addEventListener("click", downloadForecastCsv);
