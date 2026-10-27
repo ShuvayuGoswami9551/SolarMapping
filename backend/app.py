@@ -125,3 +125,91 @@ def forecast(req: ForecastRequest):
         "method": "Weather-provider forecast; no custom ML model",
         "radiation_period": "Mean over the hour ending at forecast_time_utc",
     }
+    
+@app.post("/forecast-series")
+def forecast_series(req: ForecastRequest):
+    params = {
+        "latitude": req.lat,
+        "longitude": req.lon,
+        "hourly": "cloud_cover,shortwave_radiation",
+        "timezone": "GMT",
+        "timeformat": "unixtime",
+        "forecast_days": 3,
+    }
+
+    try:
+        response = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params=params,
+            timeout=20,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    except requests.RequestException as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not retrieve the hourly forecast.",
+        ) from exc
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="The weather provider returned an unreadable response.",
+        ) from exc
+
+    try:
+        hourly = data["hourly"]
+        timestamps = hourly["time"]
+
+        now = datetime.now(timezone.utc).timestamp()
+        start_time = math.ceil(now / 3600) * 3600
+
+        start_index = next(
+            (
+                i for i, timestamp in enumerate(timestamps)
+                if timestamp >= start_time
+            ),
+            None,
+        )
+
+        if start_index is None:
+            raise ValueError("No upcoming forecast hours are available.")
+
+        series = []
+
+        for index in range(start_index, start_index + 24):
+            radiation = hourly["shortwave_radiation"][index]
+            clouds = hourly["cloud_cover"][index]
+
+            if radiation is None or clouds is None:
+                raise ValueError("Some forecast values are missing.")
+
+            radiation = float(radiation)
+            clouds = float(clouds)
+
+            if not math.isfinite(radiation) or not math.isfinite(clouds):
+                raise ValueError("Some forecast values are invalid.")
+
+            series.append({
+                "time_utc": datetime.fromtimestamp(
+                    timestamps[index],
+                    tz=timezone.utc,
+                ).isoformat(),
+                "irradiance_wm2": max(0.0, radiation),
+                "cloud_cover_percent": clouds,
+            })
+
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="A complete 24-hour forecast was not available.",
+        ) from exc
+
+    return {
+        "lat": req.lat,
+        "lon": req.lon,
+        "source": "Open-Meteo",
+        "method": "Weather-provider forecast; no custom ML model",
+        "series": series,
+    }

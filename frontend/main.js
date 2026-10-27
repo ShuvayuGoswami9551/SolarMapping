@@ -176,6 +176,10 @@ function displayForecast(forecast, point, cell, locationNumber) {
     createPopup(forecast, point, locationNumber)
   );
 
+  marker.on("popupopen", () => {
+    loadForecastChart(point, locationNumber);
+  });
+
   marker.bindTooltip(
     `Location ${locationNumber}: ` +
     `${Math.round(forecast.estimated_irradiance_wm2)} W/m²`
@@ -306,4 +310,185 @@ if (typeof L === "undefined") {
   initializeMap();
   refreshBtn.addEventListener("click", refreshForecasts);
   refreshForecasts();
+}
+
+let irradianceChart = null;
+let chartRequestId = 0;
+let chartAbortController = null;
+
+async function loadForecastChart(point, locationNumber) {
+  const locationText = document.getElementById("chartLocation");
+  const statusText = document.getElementById("chartStatus");
+  const tableBody = document.getElementById("forecastTableBody");
+
+  // Cancel the previous request if another location is selected.
+  chartAbortController?.abort();
+  chartAbortController = new AbortController();
+
+  const requestId = ++chartRequestId;
+  const controller = chartAbortController;
+
+  locationText.textContent =
+    `Location ${locationNumber}: ` +
+    `${point.lat.toFixed(2)}, ${point.lon.toFixed(2)}`;
+
+  statusText.textContent = "Loading the next 24 forecast hours…";
+  tableBody.replaceChildren();
+
+  // Remove the old location's chart while loading.
+  if (irradianceChart) {
+    irradianceChart.destroy();
+    irradianceChart = null;
+  }
+
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+  try {
+    const response = await fetch(`${API_BASE}/forecast-series`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        lat: point.lat,
+        lon: point.lon,
+        hour_ahead: 0,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      let message = `Forecast error: HTTP ${response.status}`;
+
+      try {
+        const error = await response.json();
+
+        if (typeof error.detail === "string") {
+          message = error.detail;
+        }
+      } catch {
+        // Keep the HTTP status message.
+      }
+
+      throw new Error(message);
+    }
+
+    const data = await response.json();
+
+    // Ignore a response for a previously selected location.
+    if (requestId !== chartRequestId) return;
+
+    if (
+      !Array.isArray(data.series) ||
+      data.series.length !== 24 ||
+      !data.series.every((hour) =>
+        Number.isFinite(Date.parse(hour.time_utc)) &&
+        Number.isFinite(hour.irradiance_wm2) &&
+        Number.isFinite(hour.cloud_cover_percent)
+      )
+    ) {
+      throw new Error("The backend returned incomplete hourly data.");
+    }
+
+    // Populate the table even if the chart library could not load.
+    for (const hour of data.series) {
+      const row = document.createElement("tr");
+
+      const values = [
+        formatTime(hour.time_utc),
+        Math.round(hour.irradiance_wm2),
+        Math.round(hour.cloud_cover_percent),
+      ];
+
+      for (const value of values) {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        row.appendChild(cell);
+      }
+
+      tableBody.appendChild(row);
+    }
+
+    if (typeof Chart === "undefined") {
+      statusText.textContent =
+        "The chart library did not load. " +
+        "You can still view the hourly values in the table below.";
+      return;
+    }
+
+    irradianceChart = new Chart(
+      document.getElementById("irradianceChart"),
+      {
+        type: "line",
+
+        data: {
+          labels: data.series.map((hour) =>
+            formatTime(hour.time_utc)
+          ),
+
+          datasets: [
+            {
+              label: "Forecast irradiance (W/m²)",
+              data: data.series.map((hour) =>
+                hour.irradiance_wm2
+              ),
+              borderColor: "#007f86",
+              backgroundColor: "rgba(0, 127, 134, 0.12)",
+              fill: true,
+              tension: 0,
+              pointRadius: 3,
+              pointHoverRadius: 6,
+            },
+          ],
+        },
+
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+
+          interaction: {
+            intersect: false,
+            mode: "index",
+          },
+
+          scales: {
+            x: {
+              title: {
+                display: true,
+                text: "Hour ending — browser local time",
+              },
+              ticks: {
+                maxTicksLimit: 8,
+              },
+            },
+
+            y: {
+              beginAtZero: true,
+              title: {
+                display: true,
+                text: "Irradiance (W/m²)",
+              },
+            },
+          },
+        },
+      }
+    );
+
+    statusText.textContent =
+      "Showing 24 upcoming hourly forecasts. " +
+      "The chart is independent of the map's forecast-hour selector.";
+
+  } catch (error) {
+    if (requestId !== chartRequestId) return;
+
+    console.error("Chart request failed:", error);
+
+    statusText.textContent =
+      error.name === "AbortError"
+        ? "The chart request timed out. Select the location again to retry."
+        : `Could not load chart: ${error.message}`;
+
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
