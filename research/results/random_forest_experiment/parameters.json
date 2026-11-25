@@ -1,0 +1,40 @@
+{
+  "features": [
+    "model_ghi_wm2",
+    "cloud_cover_percent",
+    "temperature_c",
+    "relative_humidity_percent",
+    "wind_speed_ms",
+    "surface_pressure_hpa",
+    "lead_hours_from_initialization"
+  ],
+  "partition_basis": "run_initialization_utc",
+  "partition_counts": {
+    "test": 144,
+    "training": 479,
+    "validation": 120
+  },
+  "training_initializations": "2025-01-01 through 2025-01-20",
+  "validation_initializations": "2025-01-21 through 2025-01-25",
+  "test_initializations": "2025-01-26 through 2025-01-31",
+  "additive_offset_wm2": 1.931645938183894,
+  "linear_intercept_wm2": 2.3417240174131666,
+  "linear_slope": 0.9958214048683018,
+  "random_forest_parameters": {
+    "n_estimators": 300,
+    "max_depth": 5,
+    "min_samples_leaf": 10,
+    "max_features": 1.0,
+    "bootstrap": true,
+    "random_state": 42,
+    "n_jobs": -1
+  },
+  "random_forest_target": "observed GHI minus provider GHI",
+  "random_forest_prediction": "max(0, provider GHI + predicted correction)",
+  "fitting_subset": "all eligible training hours",
+  "selection_metric": "Validation RMSE for observed GHI above 20 W/m\u00b2",
+  "selected_candidate": "linear",
+  "refit_after_selection": false,
+  "sklearn_version": "1.9.1",
+  "interpretation": "Exploratory January experiment. January data and earlier test results were previously inspected. This is not a new untouched final test or evidence of regional accuracy."
+}

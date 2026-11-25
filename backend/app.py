@@ -1,5 +1,11 @@
+import json
+from pathlib import Path
+
+from collections import OrderedDict, deque
 from datetime import datetime, timezone
 import math
+import threading
+import time
 
 import requests
 from fastapi import FastAPI, HTTPException
@@ -9,23 +15,83 @@ from pydantic import BaseModel, Field
 
 app = FastAPI(title="Solar Forecasting Prototype")
 
+
+def allowed_origins():
+    raw = os.environ.get(
+        "ALLOWED_ORIGINS",
+        "http://127.0.0.1:5500,http://localhost:5500,"
+        "http://127.0.0.1:8080,http://localhost:8080",
+    )
+
+    origins = [
+        item.strip().rstrip("/")
+        for item in raw.split(",")
+        if item.strip() and item.strip() != "*"
+    ]
+
+    return origins
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins(),
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
 
+HOURLY_VARIABLES = [
+    "shortwave_radiation",
+    "cloud_cover",
+    "temperature_2m",
+    "relative_humidity_2m",
+    "wind_speed_10m",
+    "surface_pressure",
+]
+
+COORDINATE_DECIMALS = 2
+CACHE_TTL_SECONDS = 600
+CACHE_MAX_ENTRIES = 300
+MAX_PROVIDER_CALLS_PER_MINUTE = 40
+VERIFICATION_FILE = (
+    Path(__file__).resolve().parent / "bondville_verification.json"
+)
+
+_cache = OrderedDict()
+_provider_call_times = deque()
+_lock = threading.Lock()
+
+
 class ForecastRequest(BaseModel):
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
     hour_ahead: int = Field(default=0, ge=0, le=6)
+    reference_hour_unix: int | None = Field(
+        default=None,
+        gt=0,
+        multiple_of=3600,
+    )
+
+
+def utc_iso(timestamp):
+    return datetime.fromtimestamp(
+        timestamp,
+        tz=timezone.utc,
+    ).isoformat()
+
+
+def requested_hour(req):
+    if req.reference_hour_unix is not None:
+        reference = req.reference_hour_unix
+    else:
+        now = datetime.now(timezone.utc).timestamp()
+        reference = math.ceil(now / 3600) * 3600
+
+    return reference + req.hour_ahead * 3600
 
 
 def cloud_category(cloud_cover):
-    # Simple descriptive categories, not satellite cloud-type detection.
     if cloud_cover < 20:
         return "CLEAR"
 
@@ -35,23 +101,95 @@ def cloud_category(cloud_cover):
     return "OVERCAST"
 
 
-@app.get("/")
-def home():
-    return {
-        "status": "ok",
-        "message": "Solar forecasting backend is running.",
-    }
+def rounded_coordinates(req):
+    # Adding 0.0 converts negative zero to zero.
+    return (
+        round(req.lat, COORDINATE_DECIMALS) + 0.0,
+        round(req.lon, COORDINATE_DECIMALS) + 0.0,
+    )
 
 
-@app.post("/forecast")
-def forecast(req: ForecastRequest):
+def finite_or_none(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+    return number if math.isfinite(number) else None
+
+
+def cache_get(key):
+    now = time.monotonic()
+
+    with _lock:
+        entry = _cache.get(key)
+
+        if entry is None:
+            return None
+
+        if now - entry["stored_at"] > CACHE_TTL_SECONDS:
+            del _cache[key]
+            return None
+
+        _cache.move_to_end(key)
+        return entry
+
+
+def cache_put(key, data, retrieved_at):
+    with _lock:
+        _cache[key] = {
+            "data": data,
+            "retrieved_at": retrieved_at,
+            "stored_at": time.monotonic(),
+        }
+        _cache.move_to_end(key)
+
+        while len(_cache) > CACHE_MAX_ENTRIES:
+            _cache.popitem(last=False)
+
+
+def reserve_provider_call():
+    now = time.monotonic()
+
+    with _lock:
+        while (
+            _provider_call_times
+            and now - _provider_call_times[0] > 60
+        ):
+            _provider_call_times.popleft()
+
+        if len(_provider_call_times) >= MAX_PROVIDER_CALLS_PER_MINUTE:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    "Too many new forecast requests. "
+                    "Wait a minute and try again."
+                ),
+            )
+
+        _provider_call_times.append(now)
+
+
+def retrieve_forecast(req):
+    lat, lon = rounded_coordinates(req)
+    key = (lat, lon)
+
+    cached = cache_get(key)
+
+    if cached is not None:
+        return cached["data"], cached["retrieved_at"], True
+
+    reserve_provider_call()
+
     params = {
-        "latitude": req.lat,
-        "longitude": req.lon,
-        "hourly": "cloud_cover,shortwave_radiation",
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": ",".join(HOURLY_VARIABLES),
+        "temperature_unit": "celsius",
+        "wind_speed_unit": "ms",
         "timezone": "GMT",
         "timeformat": "unixtime",
-        "forecast_days": 2,
+        "forecast_days": 3,
     }
 
     try:
@@ -75,141 +213,241 @@ def forecast(req: ForecastRequest):
             detail="The weather provider returned an unreadable response.",
         ) from exc
 
+    if not isinstance(data, dict) or "hourly" not in data:
+        raise HTTPException(
+            status_code=502,
+            detail="The weather provider returned an unexpected response.",
+        )
+
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+    cache_put(key, data, retrieved_at)
+
+    return data, retrieved_at, False
+
+
+def required_number(values, index):
+    value = float(values[index])
+
+    if not math.isfinite(value):
+        raise ValueError("A required forecast value is invalid.")
+
+    return value
+
+
+def optional_number(hourly, variable, index):
+    values = hourly.get(variable)
+
+    if not isinstance(values, list) or index >= len(values):
+        return None
+
+    return finite_or_none(values[index])
+
+
+def build_series(data, start_time, count):
     try:
         hourly = data["hourly"]
         timestamps = hourly["time"]
-
-        # Use the next hourly timestamp, then advance by the selected hours.
-        now = datetime.now(timezone.utc).timestamp()
-        target = math.ceil(now / 3600) * 3600 + req.hour_ahead * 3600
-
-        index = next(
-            (i for i, timestamp in enumerate(timestamps)
-             if timestamp >= target),
-            None,
-        )
-
-        if index is None:
-            raise ValueError("Requested time is outside forecast coverage.")
-
-        cloud_cover = hourly["cloud_cover"][index]
-        irradiance = hourly["shortwave_radiation"][index]
-        timestamp = timestamps[index]
-
-        if cloud_cover is None or irradiance is None:
-            raise ValueError("Forecast values are missing.")
-
-        cloud_cover = float(cloud_cover)
-        irradiance = float(irradiance)
-
-        if not math.isfinite(cloud_cover) or not math.isfinite(irradiance):
-            raise ValueError("Forecast values are invalid.")
-
-    except (KeyError, IndexError, TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="The weather provider did not return usable forecast data.",
-        ) from exc
-
-    return {
-        "lat": req.lat,
-        "lon": req.lon,
-        "hour_ahead": req.hour_ahead,
-        "condition_class": cloud_category(cloud_cover),
-        "estimated_irradiance_wm2": max(0.0, irradiance),
-        "cloud_cover_percent": cloud_cover,
-        "forecast_time_utc": datetime.fromtimestamp(
-            timestamp, tz=timezone.utc
-        ).isoformat(),
-        "source": "Open-Meteo",
-        "method": "Weather-provider forecast; no custom ML model",
-        "radiation_period": "Mean over the hour ending at forecast_time_utc",
-    }
-    
-@app.post("/forecast-series")
-def forecast_series(req: ForecastRequest):
-    params = {
-        "latitude": req.lat,
-        "longitude": req.lon,
-        "hourly": "cloud_cover,shortwave_radiation",
-        "timezone": "GMT",
-        "timeformat": "unixtime",
-        "forecast_days": 3,
-    }
-
-    try:
-        response = requests.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params=params,
-            timeout=20,
-        )
-        response.raise_for_status()
-        data = response.json()
-
-    except requests.RequestException as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="Could not retrieve the hourly forecast.",
-        ) from exc
-
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="The weather provider returned an unreadable response.",
-        ) from exc
-
-    try:
-        hourly = data["hourly"]
-        timestamps = hourly["time"]
-
-        now = datetime.now(timezone.utc).timestamp()
-        start_time = math.ceil(now / 3600) * 3600
 
         start_index = next(
             (
-                i for i, timestamp in enumerate(timestamps)
-                if timestamp >= start_time
+                index
+                for index, timestamp in enumerate(timestamps)
+                if timestamp == start_time
             ),
             None,
         )
 
         if start_index is None:
-            raise ValueError("No upcoming forecast hours are available.")
+            raise ValueError("Requested hour is unavailable.")
 
         series = []
 
-        for index in range(start_index, start_index + 24):
-            radiation = hourly["shortwave_radiation"][index]
-            clouds = hourly["cloud_cover"][index]
+        for index in range(start_index, start_index + count):
+            timestamp = required_number(timestamps, index)
 
-            if radiation is None or clouds is None:
-                raise ValueError("Some forecast values are missing.")
+            radiation = required_number(
+                hourly["shortwave_radiation"],
+                index,
+            )
 
-            radiation = float(radiation)
-            clouds = float(clouds)
+            clouds = required_number(
+                hourly["cloud_cover"],
+                index,
+            )
 
-            if not math.isfinite(radiation) or not math.isfinite(clouds):
-                raise ValueError("Some forecast values are invalid.")
+            expected_time = start_time + len(series) * 3600
+
+            if timestamp != expected_time:
+                raise ValueError("Forecast hours are not consecutive.")
+
+            if not 0 <= clouds <= 100:
+                raise ValueError("Invalid cloud-cover percentage.")
+
+            temperature = optional_number(
+                hourly, "temperature_2m", index
+            )
+            humidity = optional_number(
+                hourly, "relative_humidity_2m", index
+            )
+            wind = optional_number(
+                hourly, "wind_speed_10m", index
+            )
+            pressure = optional_number(
+                hourly, "surface_pressure", index
+            )
+
+            if humidity is not None and not 0 <= humidity <= 100:
+                humidity = None
+
+            if wind is not None and wind < 0:
+                wind = None
+
+            if pressure is not None and pressure <= 0:
+                pressure = None
 
             series.append({
-                "time_utc": datetime.fromtimestamp(
-                    timestamps[index],
-                    tz=timezone.utc,
-                ).isoformat(),
+                "time_utc": utc_iso(timestamp),
+                "interval_start_utc": utc_iso(timestamp - 3600),
                 "irradiance_wm2": max(0.0, radiation),
                 "cloud_cover_percent": clouds,
+                "condition_class": cloud_category(clouds),
+                "temperature_c": temperature,
+                "relative_humidity_percent": humidity,
+                "wind_speed_ms": wind,
+                "surface_pressure_hpa": pressure,
             })
 
-    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        return series
+
+    except (
+        KeyError,
+        IndexError,
+        TypeError,
+        ValueError,
+        OverflowError,
+        OSError,
+    ) as exc:
         raise HTTPException(
             status_code=502,
-            detail="A complete 24-hour forecast was not available.",
+            detail=(
+                "The requested forecast hours were not available "
+                "or contained unusable irradiance or cloud data. "
+                "Try refreshing the dashboard."
+            ),
         ) from exc
 
+
+def response_metadata(req, retrieved_at, cache_hit, data):
+    lat, lon = rounded_coordinates(req)
+
     return {
-        "lat": req.lat,
-        "lon": req.lon,
+        "lat": lat,
+        "lon": lon,
+        "hour_ahead": req.hour_ahead,
+        "retrieved_at_utc": retrieved_at,
+        "cache_hit": cache_hit,
+        "cache_ttl_seconds": CACHE_TTL_SECONDS,
+        "provider_latitude": finite_or_none(data.get("latitude")),
+        "provider_longitude": finite_or_none(data.get("longitude")),
+        "provider_elevation_m": finite_or_none(data.get("elevation")),
         "source": "Open-Meteo",
         "method": "Weather-provider forecast; no custom ML model",
-        "series": series,
+        "model_note": (
+            "Model selected automatically by Open-Meteo; "
+            "this app does not choose a specific model."
+        ),
+        "units": {
+            "irradiance_wm2": "W/m²",
+            "cloud_cover_percent": "%",
+            "temperature_c": "°C",
+            "relative_humidity_percent": "%",
+            "wind_speed_ms": "m/s",
+            "surface_pressure_hpa": "hPa",
+        },
+        "weather_timing": (
+            "Atmospheric variables are forecast values at time_utc. "
+            "Irradiance is the mean over the preceding hour."
+        ),
     }
+
+
+@app.get("/")
+def home():
+    return {
+        "status": "ok",
+        "backend_version": "3.2",
+        "message": "Solar forecasting backend is running.",
+        "cache_ttl_seconds": CACHE_TTL_SECONDS,
+        "cache_entries": len(_cache),
+        "max_provider_calls_per_minute": MAX_PROVIDER_CALLS_PER_MINUTE,
+        "features": [
+            "Hourly irradiance",
+            "Cloud cover",
+            "Temperature",
+            "Relative humidity",
+            "Wind speed",
+            "Surface pressure",
+            "Short-lived provider cache",
+            "Arbitrary coordinates",
+        ],
+    }
+
+
+@app.post("/forecast")
+def forecast(req: ForecastRequest):
+    data, retrieved_at, cache_hit = retrieve_forecast(req)
+    hour = build_series(data, requested_hour(req), 1)[0]
+
+    result = response_metadata(req, retrieved_at, cache_hit, data)
+
+    result.update({
+        "condition_class": hour["condition_class"],
+        "estimated_irradiance_wm2": hour["irradiance_wm2"],
+        "cloud_cover_percent": hour["cloud_cover_percent"],
+        "forecast_time_utc": hour["time_utc"],
+        "interval_start_utc": hour["interval_start_utc"],
+        "temperature_c": hour["temperature_c"],
+        "relative_humidity_percent": hour["relative_humidity_percent"],
+        "wind_speed_ms": hour["wind_speed_ms"],
+        "surface_pressure_hpa": hour["surface_pressure_hpa"],
+        "radiation_period": (
+            "Mean over the hour ending at forecast_time_utc"
+        ),
+    })
+
+    return result
+
+
+@app.post("/forecast-series")
+def forecast_series(req: ForecastRequest):
+    data, retrieved_at, cache_hit = retrieve_forecast(req)
+    start_time = requested_hour(req)
+
+    series = build_series(data, start_time, count=24)
+
+    result = response_metadata(req, retrieved_at, cache_hit, data)
+
+    result.update({
+        "selected_time_utc": utc_iso(start_time),
+        "radiation_period": "Mean over the hour ending at time_utc",
+        "series": series,
+    })
+
+    return result
+
+@app.get("/verification/bondville")
+def bondville_verification():
+    try:
+        return json.loads(
+            VERIFICATION_FILE.read_text(encoding="utf-8")
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="Bondville verification data has not been generated.",
+        ) from exc
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Bondville verification data could not be read.",
+        ) from exc

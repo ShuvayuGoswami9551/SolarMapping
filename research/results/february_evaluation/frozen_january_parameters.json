@@ -1,0 +1,11 @@
+{
+  "additive_offset_wm2": 1.931645938183894,
+  "linear_intercept_wm2": 2.3417240174131666,
+  "linear_slope": 0.9958214048683018,
+  "fitting_subset": "all eligible training hours",
+  "prediction_rule": "Corrected predictions clipped to a minimum of zero; no observation-based application rule",
+  "selection_metric": "Validation RMSE for observed irradiance above 20 W/m\u00b2",
+  "selected_candidate": "linear",
+  "refit_after_selection": false,
+  "interpretation": "Exploratory January experiment; full month previously inspected"
+}

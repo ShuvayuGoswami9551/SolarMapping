@@ -2,19 +2,29 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  />
+
+    <meta
+    name="description"
+    content="Student research prototype showing weather-provider solar irradiance forecasts, atmospheric conditions, and a Bondville verification example."
+  />
 
   <title>Solar Forecasting Dashboard</title>
+
   <link
-  rel="stylesheet"
-  href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
   />
-  <link
-  rel= "stylesheet"
-  href= "styles.css" />
+
+  <link rel="stylesheet" href="styles.css" />
 </head>
 
 <body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
   <header>
     <div class="header-content">
       <p class="project-label">Student research prototype</p>
@@ -22,30 +32,34 @@
       <h1>Solar Forecasting Dashboard</h1>
 
       <p class="header-description">
-        Developing a web-based tool to explore regional sunlight
-        conditions using weather data and, in future versions,
-        satellite observations and machine learning.
+        Explore regional solar irradiance forecasts through an
+        interactive map and hourly charts. Satellite observations
+        and custom machine learning remain research goals.
       </p>
     </div>
   </header>
 
-  <main>
+  <main id="main-content" tabindex="-1">
     <section class="overview" aria-label="Project overview">
       <div class="overview-card">
         <span class="overview-label">Pilot region</span>
-        <span class="overview-value">Maryville, Missouri area</span>
+        <span class="overview-value">
+          Maryville, Missouri area
+        </span>
       </div>
 
       <div class="overview-card">
         <span class="overview-label">Displayed quantity</span>
         <span class="overview-value">
-          Estimated surface irradiance · W/m²
+          Hourly mean irradiance · W/m²
         </span>
       </div>
 
       <div class="overview-card">
         <span class="overview-label">Development stage</span>
-        <span class="overview-value">Weather-provider forecast</span>
+        <span class="overview-value">
+          Weather-provider forecast
+        </span>
       </div>
     </section>
 
@@ -54,7 +68,9 @@
 
       <div class="controls">
         <div class="field">
-          <label for="hourAhead">Forecast lead time (hours)</label>
+          <label for="hourAhead">
+            Hours after the next hourly boundary
+          </label>
 
           <input
             type="number"
@@ -73,19 +89,32 @@
       </div>
 
       <p class="hint" id="forecast-note">
-        Development note: the current backend uses current weather.
-        Future-hour selection will work after a forecast data source
-        is connected.
+        Select 0–6 hours after the next hourly boundary.
+        The map and chart use the same starting time.
+        This offset is not lead time from a model initialization.
       </p>
+
+      <p
+        id="selectedForecastTime"
+        class="selected-time"
+        role="status"
+        aria-live="polite"
+      >
+        Waiting for forecast data…
+      </p>
+
+      <p class="hint" id="timezoneNote"></p>
     </section>
 
     <section class="panel" aria-labelledby="grid-title">
       <h2 id="grid-title">Regional solar forecast map</h2>
 
       <p class="map-description">
-        Click a sample location to view its forecast. Marker colors
-        represent irradiance, not cloud type. These are discrete
-        sample points, not continuous coverage.
+        Click a sample marker to view its forecast, or click anywhere
+        else on the map for one user-selected point. Marker colors
+        represent irradiance, not cloud type. Sample points are
+        discrete, not continuous coverage, and forecasts away from
+        them have not been validated.
       </p>
 
       <ul class="legend" aria-label="Irradiance color scale">
@@ -143,24 +172,27 @@
           target="_blank"
           rel="noopener noreferrer"
         >Open-Meteo</a>.
-        Irradiance values are hourly averages, not panel electricity output.
-        Color bands are display categories chosen for this prototype.
+        Irradiance values are hourly averages, not panel electricity
+        output. Color bands are display categories chosen for this
+        prototype.
       </p>
 
       <noscript>
-        <p>Please enable JavaScript to use the map.</p>
+        <p>Please enable JavaScript to use this dashboard.</p>
       </noscript>
     </section>
 
     <section class="panel" aria-labelledby="chart-title">
-      <h2 id="chart-title">24-hour irradiance forecast</h2>
+      <h2 id="chart-title">
+        24-hour forecast from the selected time
+      </h2>
 
       <p id="chartLocation">
-        Select a sample location on the map to view its forecast.
+        A location will be selected after forecasts load.
       </p>
 
       <p id="chartStatus" role="status" aria-live="polite">
-        No location selected.
+        No forecast loaded.
       </p>
 
       <button id="downloadCsvBtn" type="button" disabled>
@@ -178,10 +210,10 @@
       </div>
 
       <p class="hint">
-        Source: Open-Meteo. Each value is average irradiance over the
-        hour ending at the displayed time. Times use your browser's
-        local time zone. This is a weather-provider forecast, not a
-        custom machine-learning prediction.
+        The first chart value matches the selected map hour.
+        Each irradiance value is an average over the hour ending
+        at the displayed time. This is a weather-provider forecast,
+        not a custom machine-learning prediction.
       </p>
 
       <details>
@@ -189,7 +221,9 @@
 
         <div class="table-container">
           <table class="forecast-table">
-            <caption>Selected location's hourly forecast</caption>
+            <caption>
+              Selected location's hourly forecast
+            </caption>
 
             <thead>
               <tr>
@@ -204,47 +238,71 @@
         </div>
       </details>
     </section>
-  
+
     <section class="panel" aria-labelledby="about-title">
       <h2 id="about-title">About this prototype</h2>
 
       <p>
-        This project is developing a regional forecasting workflow
-        and a public interface for exploring its predictions.
+        This project is developing a regional solar forecasting
+        workflow and an accessible interface for exploring its
+        predictions.
       </p>
 
       <ul class="details">
         <li>
-          Current stage: displaying Open-Meteo irradiance forecasts and cloud cover.
+          Current data: provider-supplied hourly irradiance
+          forecasts and cloud cover from Open-Meteo.
         </li>
+
         <li>
-          Planned additions: an interactive map, location-based
-          time series, and forecast timestamps.
+          Interface features: a sample-point map, synchronized
+          forecast times, location-based charts, hourly tables,
+          and CSV export.
         </li>
+
         <li>
-          Research goals: incorporate satellite data, train forecasting
-          models, and evaluate predictions against independent observations.
+          Research evaluation: a separate Bondville, Illinois
+          experiment compared archived predictions with ground
+          observations. That experiment does not establish
+          accuracy at the Maryville map locations.
+        </li>
+
+        <li>
+          Future research: additional atmospheric predictors,
+          satellite observations, and independently evaluated
+          custom machine-learning models.
         </li>
       </ul>
 
       <div class="notice">
         <p>
-          Research demonstration only. Forecasts are supplied by Open-Meteo,
-          not a custom machine-learning model. Cloud categories use simple
-          cloud-cover thresholds and are not official weather alerts.
-          This project has not independently validated the forecasts.
+          Research demonstration only. Displayed predictions are
+          supplied by Open-Meteo, not a custom machine-learning
+          model. Cloud descriptions use simple cloud-cover
+          thresholds; they are not satellite cloud classifications
+          or official weather alerts.
         </p>
       </div>
     </section>
   </main>
 
   <footer>
-    Shuvayu Goswami · Solar forecasting research prototype
+    <p>Shuvayu Goswami · Solar forecasting research prototype</p>
+    <p>
+      Weather data:
+      <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a>.
+      Map data ©
+      <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>.
+      Verification observations: NOAA SURFRAD, Bondville, Illinois.
+    </p>
   </footer>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
-<script src="main.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+
+  <script src="config.js?v=1"></script>
+  <script src="main.js?v=7"></script>
+  <script src="verification.js?v=2"></script>
 </body>
 </html>
