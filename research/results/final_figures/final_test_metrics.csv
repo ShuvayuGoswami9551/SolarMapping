@@ -1,9 +1,0 @@
-evaluation_period,candidate,evaluation_subset,matched_hours,mae_wm2,rmse_wm2,mean_bias_wm2
-January 26–31 initialized runs,baseline,all_valid_hours,144,10.62899584728399,22.120753064181468,-3.869549217218695
-January 26–31 initialized runs,baseline,observed_ghi_above_20_wm2,55,26.67607730589299,35.58264020352119,-10.467496642507488
-January 26–31 initialized runs,linear,all_valid_hours,144,11.674186624443443,22.14368147801253,-1.93129177418838
-January 26–31 initialized runs,linear,observed_ghi_above_20_wm2,55,26.32741265680933,35.476348814591674,-9.174903900978313
-February 1–28 initialized runs,baseline,all_valid_hours,671,23.905639954157323,58.46349761340407,10.720406792960393
-February 1–28 initialized runs,linear,all_valid_hours,671,25.05917946817806,58.6190648945686,12.517624368450626
-February 1–28 initialized runs,baseline,observed_ghi_above_20_wm2,279,56.74810342759312,90.62356869765603,25.776324931321252
-February 1–28 initialized runs,linear,observed_ghi_above_20_wm2,279,56.79456389041792,90.8228968352916,26.813353759818224

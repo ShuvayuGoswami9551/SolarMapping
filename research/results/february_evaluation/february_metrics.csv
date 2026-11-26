@@ -1,5 +1,0 @@
-evaluation_period,candidate,evaluation_subset,matched_hours,mae_wm2,rmse_wm2,mean_bias_wm2
-february_initialized_runs,baseline,all_valid_hours,671,23.905639954157323,58.46349761340407,10.720406792960393
-february_initialized_runs,linear,all_valid_hours,671,25.05917946817806,58.6190648945686,12.517624368450626
-february_initialized_runs,baseline,observed_ghi_above_20_wm2,279,56.74810342759312,90.62356869765603,25.776324931321252
-february_initialized_runs,linear,observed_ghi_above_20_wm2,279,56.79456389041792,90.8228968352916,26.813353759818224
