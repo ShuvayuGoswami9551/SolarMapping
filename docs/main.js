@@ -120,6 +120,9 @@ function ensureBackend() {
 
 window.solarEnsureBackend = ensureBackend;
 
+function labelFor(key) {
+  return key === CUSTOM_KEY ? "Selected point" : `Location ${key}`;
+}
 
 function addLine(parent, text, bold = false) {
   const line = document.createElement(bold ? "strong" : "div");
