@@ -75,6 +75,7 @@ let currentHourAhead = 0;
 
 const forecastCache = new Map();
 const markerCache = new Map();
+const sampleCells = new Map();
 
 let weatherGrid;
 let weatherLocation;
@@ -429,6 +430,24 @@ function createPopup(data, point, key) {
   return popup;
 }
 
+function markerIcon(color, selected, isCustom) {
+  const size = selected ? 28 : 24;
+  const border = selected ? 4 : 2;
+  const style = isCustom ? "dashed" : "solid";
+
+  return L.divIcon({
+    className: "",
+    html:
+      `<div style="width:${size}px;height:${size}px;` +
+      `border-radius:50%;box-sizing:border-box;` +
+      `background:${color};opacity:0.95;cursor:grab;` +
+      `border:${border}px ${style} #10283f;"></div>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+    popupAnchor: [0, -size / 2],
+    tooltipAnchor: [size / 2, 0],
+  });
+}
 
 function displayLocation(data, point, cell, key) {
   const hour = data.series[0];
@@ -439,15 +458,17 @@ function displayLocation(data, point, cell, key) {
   const previous = markerCache.get(key);
   if (previous) markerLayer.removeLayer(previous);
 
-  const marker = L.circleMarker([point.lat, point.lon], {
-    radius: 12,
-    color: "#10283f",
-    weight: 2,
-    fillColor: color,
-    fillOpacity: 0.95,
-    dashArray: isCustom ? "4 3" : null,
+  const marker = L.marker([point.lat, point.lon], {
+    icon: markerIcon(color, false, isCustom),
+    draggable: true,
     bubblingMouseEvents: false,
   }).addTo(markerLayer);
+
+  marker._color = color;
+  marker._isCustom = isCustom;
+  marker._origin = { lat: point.lat, lon: point.lon };
+
+  marker.on("dragend", () => onMarkerDragEnd(key, marker));
 
   markerCache.set(key, marker);
 
@@ -630,10 +651,9 @@ function selectLocation(key) {
   });
 
   markerCache.forEach((marker, markerKey) => {
-    marker.setStyle({
-      weight: markerKey === key ? 4 : 2,
-    });
-    marker.setRadius(markerKey === key ? 14 : 12);
+    marker.setIcon(
+      markerIcon(marker._color, markerKey === key, marker._isCustom)
+    );
   });
 
   renderWeather();
@@ -834,6 +854,77 @@ function onMapClick(event) {
   loadCustomPoint(customPoint, true);
 }
 
+function stopDrag(marker, message) {
+  const origin = marker._origin;
+  marker.setLatLng([origin.lat, origin.lon]);
+  mapStatus.textContent = message;
+}
+
+async function onMarkerDragEnd(key, marker) {
+  if (loading || customLoading) {
+    stopDrag(marker, "Wait for the current load to finish.");
+    return;
+  }
+
+  if (
+    currentReferenceHourUnix === null ||
+    Date.now() - currentReferenceHourUnix * 1000 > STALE_REFERENCE_MS
+  ) {
+    stopDrag(marker, "Press Refresh data before moving markers.");
+    return;
+  }
+
+  const wrapped = marker.getLatLng().wrap();
+  const point = {
+    lat: Number(wrapped.lat.toFixed(2)),
+    lon: Number(wrapped.lng.toFixed(2)),
+  };
+
+  if (!(Math.abs(point.lat) <= 90 && Math.abs(point.lon) <= 180)) {
+    stopDrag(marker, "That position is outside the valid range.");
+    return;
+  }
+
+  if (key === CUSTOM_KEY) {
+    customPoint = point;
+    await loadCustomPoint(point, selectedKey === CUSTOM_KEY);
+    return;
+  }
+
+  const cell = sampleCells.get(key);
+  const oldPoint = marker._origin;
+  const oldData = forecastCache.get(key);
+
+  customLoading = true;
+  refreshBtn.disabled = true;
+  cell.textContent = "Loading moved location…";
+  mapStatus.textContent =
+    `Loading forecast for ${point.lat.toFixed(2)}, ` +
+    `${point.lon.toFixed(2)}…`;
+
+  try {
+    const data = await fetchForecastSeries(
+      point,
+      currentHourAhead,
+      currentReferenceHourUnix
+    );
+
+    points[key - 1] = point;
+    forecastCache.set(key, data);
+    displayLocation(data, point, cell, key);
+    selectLocation(key);
+    mapStatus.textContent = `Location ${key} moved and reloaded.`;
+  } catch (error) {
+    console.error("Moved-location request failed:", error);
+    if (oldData) displayLocation(oldData, oldPoint, cell, key);
+    mapStatus.textContent =
+      `Could not load the new position (${errorMessage(error)}). ` +
+      "The marker was returned.";
+  } finally {
+    customLoading = false;
+    if (!loading) refreshBtn.disabled = false;
+  }
+}
 
 async function refreshForecasts() {
   if (loading || customLoading) return;
@@ -869,6 +960,7 @@ async function refreshForecasts() {
     `Requested hour ending: ${formatTime(selectedTime)}`;
 
   forecastCache.clear();
+  sampleCells.clear();
   markerCache.clear();
   markerLayer.clearLayers();
   grid.replaceChildren();
@@ -897,6 +989,7 @@ async function refreshForecasts() {
       cell.className = "cell";
       cell.textContent = `Loading location ${locationNumber}…`;
       grid.appendChild(cell);
+      sampleCells.set(locationNumber, cell);
 
       try {
         const data = await fetchForecastSeries(
