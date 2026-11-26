@@ -257,7 +257,7 @@
 
     content.appendChild(
       buildTable(
-        "Uncorrected archived forecast compared with SURFRAD",
+        "Uncorrected archived forecast compared with SURFRAD.",
         [
           "Subset",
           "Hours",
