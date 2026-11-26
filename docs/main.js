@@ -19,10 +19,6 @@ const selectedTimeLabel =
 const points = [
   { lat: 40.34, lon: -94.87 },
   { lat: 40.34, lon: -94.77 },
-  { lat: 40.44, lon: -94.87 },
-  { lat: 40.44, lon: -94.77 },
-  { lat: 40.54, lon: -94.87 },
-  { lat: 40.54, lon: -94.77 },
   { lat: 40.64, lon: -94.87 },
   { lat: 40.64, lon: -94.77 },
 ];
@@ -76,6 +72,8 @@ let currentHourAhead = 0;
 const forecastCache = new Map();
 const markerCache = new Map();
 const sampleCells = new Map();
+const placeNames = new Map();
+let placeQueue = Promise.resolve();
 
 let weatherGrid;
 let weatherLocation;
@@ -122,7 +120,70 @@ function ensureBackend() {
 window.solarEnsureBackend = ensureBackend;
 
 function labelFor(key) {
-  return key === CUSTOM_KEY ? "Selected point" : `Location ${key}`;
+  return (
+    placeNames.get(key) ??
+    (key === CUSTOM_KEY ? "Selected point" : `Location ${key}`)
+  );
+}
+
+function placeNameFor(point) {
+  const cacheKey =
+    `placeName:${point.lat.toFixed(2)},${point.lon.toFixed(2)}`;
+
+  try {
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) return Promise.resolve(cached);
+  } catch {
+    // Storage unavailable; continue without cache.
+  }
+
+  const job = placeQueue.then(async () => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    let name = null;
+
+    try {
+      const url =
+        "https://nominatim.openstreetmap.org/reverse" +
+        `?format=jsonv2&lat=${point.lat}&lon=${point.lon}` +
+        "&zoom=10&addressdetails=1&accept-language=en";
+
+      const response = await fetch(url, { signal: controller.signal });
+
+      if (response.ok) {
+        const data = await response.json();
+        const a = data.address || {};
+        const place =
+          a.city || a.town || a.village || a.hamlet ||
+          a.municipality || a.county;
+
+        if (place) {
+          name = a.state ? `Near ${place}, ${a.state}` : `Near ${place}`;
+          try {
+            localStorage.setItem(cacheKey, name);
+          } catch {
+            // Ignore storage errors.
+          }
+        }
+      }
+    } catch {
+      // Fall back to the numbered label.
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    return name;
+  });
+
+  placeQueue = job.catch(() => {});
+  return job;
+}
+
+async function setPlaceName(key, point) {
+  const name = await placeNameFor(point);
+  if (name) placeNames.set(key, name);
+  else placeNames.delete(key);
 }
 
 function addLine(parent, text, bold = false) {
@@ -383,8 +444,7 @@ function createPopup(data, point, key) {
   popup.className = "forecast-popup";
 
   const heading = document.createElement("h3");
-  heading.textContent =
-    key === CUSTOM_KEY ? "Selected point" : `Sample location ${key}`;
+  heading.textContent = labelFor(key);
   popup.appendChild(heading);
 
   addLine(
@@ -802,6 +862,7 @@ async function loadCustomPoint(point, select) {
     );
 
     forecastCache.set(CUSTOM_KEY, data);
+    await setPlaceName(CUSTOM_KEY, point);
     displayLocation(data, point, customCell, CUSTOM_KEY);
 
     mapStatus.textContent =
@@ -911,6 +972,7 @@ async function onMarkerDragEnd(key, marker) {
 
     points[key - 1] = point;
     forecastCache.set(key, data);
+    await setPlaceName(key, point);
     displayLocation(data, point, cell, key);
     selectLocation(key);
     mapStatus.textContent = `Location ${key} moved and reloaded.`;
@@ -997,7 +1059,8 @@ async function refreshForecasts() {
           hourAhead,
           referenceHourUnix
         );
-
+        
+        await setPlaceName(locationNumber, point);
         displayLocation(data, point, cell, locationNumber);
         forecastCache.set(locationNumber, data);
         loadedSamples += 1;
