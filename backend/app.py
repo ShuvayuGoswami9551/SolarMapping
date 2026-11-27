@@ -8,6 +8,9 @@ import math
 import threading
 import time
 
+import logging
+logger = logging.getLogger("uvicorn.error")
+
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -193,26 +196,41 @@ def retrieve_forecast(req):
         "forecast_days": 3,
     }
 
-    try:
-        response = requests.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params=params,
-            timeout=20,
-        )
-        response.raise_for_status()
-        data = response.json()
+    data = None
 
-    except requests.RequestException as exc:
+    for attempt in range(2):
+        try:
+            response = requests.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params=params,
+                headers={"User-Agent": "SolarMapping-student-project"},
+                timeout=20,
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                break
+
+            logger.error(
+                "Open-Meteo HTTP %s: %s",
+                response.status_code,
+                response.text[:300],
+            )
+
+        except requests.RequestException as exc:
+            logger.error("Open-Meteo request failed: %r", exc)
+
+        except ValueError as exc:
+            logger.error("Open-Meteo returned unreadable JSON: %r", exc)
+
+        if attempt == 0:
+            time.sleep(1.5)
+
+    if data is None:
         raise HTTPException(
             status_code=502,
             detail="Could not retrieve weather data. Try again shortly.",
-        ) from exc
-
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="The weather provider returned an unreadable response.",
-        ) from exc
+        )
 
     if not isinstance(data, dict) or "hourly" not in data:
         raise HTTPException(
