@@ -376,7 +376,7 @@ def response_metadata(req, retrieved_at, cache_hit, data):
 def home():
     return {
         "status": "ok",
-        "backend_version": "3.2",
+        "backend_version": "3.3",
         "message": "Solar forecasting backend is running.",
         "cache_ttl_seconds": CACHE_TTL_SECONDS,
         "cache_entries": len(_cache),
